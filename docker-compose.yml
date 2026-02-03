@@ -1,0 +1,15 @@
+services:
+  m4b-to-mp3:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - APP_USERNAME=admin
+      - APP_PASSWORD=password-to-change
+      - SECRET_KEY=change-to-random-string
+      - AUDIOBOOKSHELF_URL=https://audiobooks.yourdomain.com
+      - AUDIOBOOKSHELF_TOKEN=your-api-token-here
+      - TEMP_DIR=/data/temp
+    volumes:
+      - /path/to/hdd/m4b-temp:/data/temp
+    restart: unless-stopped

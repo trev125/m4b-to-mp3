@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Login - M4B to MP3{% endblock %}
+
+{% block body %}
+<main class="container">
+    <article style="max-width: 400px; margin: 100px auto;">
+        <header>
+            <h1>M4B to MP3</h1>
+        </header>
+        {% if error %}
+        <p style="color: var(--pico-color-red-500);">{{ error }}</p>
+        {% endif %}
+        <form method="POST">
+            <label>Username
+                <input type="text" name="username" required autofocus>
+            </label>
+            <label>Password
+                <input type="password" name="password" required>
+            </label>
+            <label>
+                <input type="checkbox" name="remember" value="1">
+                Remember me for 30 days
+            </label>
+            <button type="submit">Login</button>
+        </form>
+    </article>
+</main>
+{% endblock %}

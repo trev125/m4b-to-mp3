@@ -1,0 +1,619 @@
+{% extends "base.html" %}
+
+{% block title %}M4B to MP3 Splitter{% endblock %}
+
+{% block body %}
+<nav class="container">
+    <ul><li><strong>M4B to MP3 Splitter</strong></li></ul>
+    <ul>
+        <li><button class="theme-toggle" id="themeToggle" title="Toggle dark mode">🌙</button></li>
+        <li><a href="/logout" role="button" class="btn-danger">Logout</a></li>
+    </ul>
+</nav>
+
+<main class="container">
+    <div class="tabs" id="mainTabs">
+        <button class="active" data-tab="upload">Upload</button>
+        <button data-tab="library" id="libraryTab" hidden>Library</button>
+        <button data-tab="jobs">Jobs</button>
+    </div>
+
+    <!-- Upload Tab -->
+    <div id="uploadTabContent" class="tab-content">
+        <article>
+            <div class="dropzone" id="dropzone">
+                <input type="file" id="fileInput" accept=".m4b,.m4a" hidden>
+                <p>Drag & drop your <strong>.m4b</strong> or <strong>.m4a</strong> file here<br><small>or click to browse</small></p>
+            </div>
+        </article>
+    </div>
+
+    <!-- Library Tab -->
+    <div id="libraryTabContent" class="tab-content" hidden>
+        <article>
+            <header>
+                <span>Audiobookshelf Library</span>
+                <small id="sortLabel" style="opacity: 0.7; margin-left: 0.5rem;">Sorted by Recently Added</small>
+            </header>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 2fr auto; gap: 0.5rem; margin-bottom: 1rem;">
+                <select id="authorFilter">
+                    <option value="">All Authors</option>
+                </select>
+                <select id="seriesFilter">
+                    <option value="">All Series</option>
+                </select>
+                <select id="sortOrder">
+                    <option value="addedAt-desc" selected>Recently Added</option>
+                    <option value="addedAt">Oldest Added</option>
+                    <option value="media.metadata.title">Title A-Z</option>
+                    <option value="media.metadata.title-desc">Title Z-A</option>
+                    <option value="media.metadata.authorName">Author A-Z</option>
+                    <option value="media.metadata.authorName-desc">Author Z-A</option>
+                    <option value="media.duration-desc">Longest First</option>
+                    <option value="media.duration">Shortest First</option>
+                </select>
+                <input type="search" id="librarySearch" placeholder="Search...">
+                <button type="button" id="clearFilters" title="Clear filters">Clear</button>
+            </div>
+            <div id="libraryGrid" class="library-grid">
+                <p style="grid-column: 1/-1; text-align: center; color: var(--pico-muted-color);">Loading library...</p>
+            </div>
+        </article>
+    </div>
+
+    <!-- Jobs Tab -->
+    <div id="jobsTabContent" class="tab-content" hidden>
+        <article id="progressContainer" hidden>
+            <header>
+                <span id="progressStatus"></span>
+            </header>
+            <div class="book-info" id="bookInfo" hidden>
+                <div id="bookCover" class="book-cover placeholder">📚</div>
+                <div class="book-meta">
+                    <h3 class="book-title" id="bookTitle"></h3>
+                    <p class="book-author" id="bookAuthor"></p>
+                    <div class="book-details">
+                        <span id="bookDuration"></span>
+                        <span id="bookChapters"></span>
+                        <span id="bookSize"></span>
+                    </div>
+                </div>
+            </div>
+            <div id="progressBar" class="progress-bar"><div class="fill"></div></div>
+            <div class="log-container" id="logContainer"></div>
+            <small id="elapsedTime"></small>
+            <footer>
+                <button id="cancelBtn" class="btn-danger" hidden>Cancel</button>
+                <button id="downloadBtn" class="btn-success" hidden>Download ZIP</button>
+            </footer>
+        </article>
+
+        <article>
+            <header>
+                <span>All Jobs</span>
+            </header>
+            <div id="jobsList">Loading...</div>
+        </article>
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const $ = id => document.getElementById(id);
+    const dropzone = $('dropzone'), fileInput = $('fileInput'), progressContainer = $('progressContainer');
+    const progressStatus = $('progressStatus'), progressBar = $('progressBar');
+    const logContainer = $('logContainer'), downloadBtn = $('downloadBtn'), cancelBtn = $('cancelBtn');
+    const elapsedTime = $('elapsedTime'), jobsList = $('jobsList');
+    const bookInfo = $('bookInfo'), bookCover = $('bookCover'), bookTitle = $('bookTitle');
+    const bookAuthor = $('bookAuthor'), bookDuration = $('bookDuration');
+    const bookChapters = $('bookChapters'), bookSize = $('bookSize');
+    
+    let state = {
+        currentJobId: null,
+        elapsedBase: null,
+        elapsedStartLocal: null,
+        elapsedInterval: null,
+        eventSource: null
+    };
+
+    loadJobs();
+    setInterval(loadJobs, 3000);
+    checkAudiobookshelf();
+
+    // Theme toggle
+    $('themeToggle').onclick = () => {
+        const current = document.documentElement.getAttribute('data-theme');
+        setTheme(current === 'dark' ? 'light' : 'dark');
+    };
+
+    // Hash-based routing
+    let audiobooksLibraryId = null;
+    
+    function switchTab(tab) {
+        // Update tab buttons
+        $('mainTabs').querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+        
+        // Show/hide content
+        $('uploadTabContent').hidden = tab !== 'upload';
+        $('libraryTabContent').hidden = tab !== 'library';
+        $('jobsTabContent').hidden = tab !== 'jobs';
+        
+        // Update URL hash without triggering hashchange
+        if (location.hash !== `#${tab}`) {
+            history.replaceState(null, '', `#${tab}`);
+        }
+        
+        // Reload library when switching to library tab
+        if (tab === 'library' && audiobooksLibraryId) {
+            loadLibraryItems(audiobooksLibraryId);
+        }
+    }
+    
+    // Handle tab clicks
+    $('mainTabs').onclick = e => {
+        if (e.target.tagName !== 'BUTTON') return;
+        switchTab(e.target.dataset.tab);
+    };
+    
+    // Handle browser back/forward and initial load
+    function handleHash() {
+        const hash = location.hash.slice(1) || 'upload';
+        const validTabs = ['upload', 'library', 'jobs'];
+        switchTab(validTabs.includes(hash) ? hash : 'upload');
+    }
+    
+    window.addEventListener('hashchange', handleHash);
+    handleHash(); // Handle initial load
+
+    // Audiobookshelf integration
+    async function checkAudiobookshelf() {
+        try {
+            const res = await fetch('/abs/status');
+            const data = await res.json();
+            if (data.configured) {
+                $('libraryTab').hidden = false;
+                loadLibraries();
+            }
+        } catch {}
+    }
+
+    async function loadLibraries() {
+        try {
+            const res = await fetch('/abs/libraries');
+            const libraries = await res.json();
+            
+            // Find the Audiobooks library and load it automatically
+            const audiobooksLib = libraries.find(lib => 
+                lib.name.toLowerCase() === 'audiobooks' || 
+                lib.name.toLowerCase().includes('audiobook')
+            );
+            
+            if (audiobooksLib) {
+                audiobooksLibraryId = audiobooksLib.id;
+            } else if (libraries.length > 0) {
+                audiobooksLibraryId = libraries[0].id;
+            }
+            // Don't load yet - will load when tab is clicked
+        } catch {}
+    }
+
+    let libraryItems = []; // Store all items for filtering
+    
+    async function loadLibraryItems(libraryId, keepFilters = false) {
+        const grid = $('libraryGrid');
+        const authorFilter = $('authorFilter');
+        const seriesFilter = $('seriesFilter');
+        const searchInput = $('librarySearch');
+        const sortOrder = $('sortOrder').value;
+        
+        // Parse sort option
+        const isDesc = sortOrder.endsWith('-desc');
+        const sortField = isDesc ? sortOrder.replace('-desc', '') : sortOrder;
+        
+        // Reset filters only if not keeping them
+        if (!keepFilters) {
+            authorFilter.innerHTML = '<option value="">All Authors</option>';
+            seriesFilter.innerHTML = '<option value="">All Series</option>';
+            searchInput.value = '';
+        }
+        libraryItems = [];
+        
+        grid.innerHTML = '<p style="grid-column: 1/-1; text-align: center;">Loading...</p>';
+        
+        try {
+            const res = await fetch(`/abs/libraries/${libraryId}/items?sort=${sortField}&desc=${isDesc ? '1' : '0'}`);
+            const data = await res.json();
+            
+            libraryItems = data.items || [];
+            
+            // Populate author/series filters only if not keeping them
+            if (!keepFilters) {
+                (data.authors || []).forEach(author => {
+                    const opt = document.createElement('option');
+                    opt.value = author;
+                    opt.textContent = author;
+                    authorFilter.appendChild(opt);
+                });
+                
+                (data.series || []).forEach(series => {
+                    const opt = document.createElement('option');
+                    opt.value = series;
+                    opt.textContent = series;
+                    seriesFilter.appendChild(opt);
+                });
+            }
+            
+            renderLibraryGrid();
+        } catch {
+            grid.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: var(--pico-muted-color);">Failed to load library</p>';
+        }
+    };
+    
+    function renderLibraryGrid() {
+        const grid = $('libraryGrid');
+        const authorFilter = $('authorFilter').value;
+        const seriesFilter = $('seriesFilter').value;
+        const search = $('librarySearch').value.toLowerCase();
+        
+        let filtered = libraryItems.filter(item => {
+            if (authorFilter && !item.authors.includes(authorFilter)) return false;
+            if (seriesFilter && !item.series.includes(seriesFilter)) return false;
+            if (search) {
+                const searchable = `${item.title} ${item.authors.join(' ')} ${item.series.join(' ')}`.toLowerCase();
+                if (!searchable.includes(search)) return false;
+            }
+            return true;
+        });
+        
+        if (!filtered.length) {
+            grid.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: var(--pico-muted-color);">No matching books</p>';
+            return;
+        }
+        
+        grid.innerHTML = filtered.map(item => `
+            <div class="library-item" data-id="${item.id}" data-title="${item.title}">
+                <div class="library-item-cover">
+                    ${item.has_cover ? `<img src="/abs/items/${item.id}/cover" loading="lazy">` : '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2rem;">📚</div>'}
+                </div>
+                <div class="library-item-title" title="${item.title}">${item.title}</div>
+                <div class="library-item-author" title="${item.authors.join(', ')}">${item.authors.join(', ')}</div>
+            </div>`).join('');
+        
+        // Add click handlers
+        grid.querySelectorAll('.library-item').forEach(el => {
+            el.onclick = () => convertFromLibrary(el.dataset.id, el.dataset.title);
+        });
+    }
+    
+    // Filter/search event listeners
+    $('authorFilter').onchange = renderLibraryGrid;
+    $('seriesFilter').onchange = renderLibraryGrid;
+    $('librarySearch').oninput = renderLibraryGrid;
+    $('sortOrder').onchange = () => {
+        // Update sort label
+        const sortSelect = $('sortOrder');
+        $('sortLabel').textContent = 'Sorted by ' + sortSelect.options[sortSelect.selectedIndex].text;
+        
+        if (audiobooksLibraryId) {
+            // Reload with new sort order, keep current filters
+            const currentAuthor = $('authorFilter').value;
+            const currentSeries = $('seriesFilter').value;
+            const currentSearch = $('librarySearch').value;
+            
+            loadLibraryItems(audiobooksLibraryId, true).then(() => {
+                $('authorFilter').value = currentAuthor;
+                $('seriesFilter').value = currentSeries;
+                $('librarySearch').value = currentSearch;
+                renderLibraryGrid();
+            });
+        }
+    };
+    $('clearFilters').onclick = () => {
+        $('authorFilter').value = '';
+        $('seriesFilter').value = '';
+        $('librarySearch').value = '';
+        renderLibraryGrid();
+    };
+
+    async function convertFromLibrary(itemId, title) {
+        resetJobView();
+        
+        // Switch to jobs tab and scroll to progress
+        switchTab('jobs');
+        progressContainer.hidden = false;
+        progressContainer.scrollIntoView({ behavior: 'smooth' });
+        progressStatus.textContent = 'Downloading from Audiobookshelf...';
+        progressBar.className = 'progress-bar uploading';
+        
+        try {
+            const res = await fetch(`/abs/items/${itemId}/convert`, { method: 'POST' });
+            const data = await res.json();
+            
+            if (!res.ok) throw new Error(data.error || 'Failed to start conversion');
+            
+            state.currentJobId = data.job_id;
+            loadJobs();
+            // Connect to SSE immediately to get download progress
+            connectToJob(data.job_id);
+        } catch (err) {
+            progressStatus.textContent = 'Error';
+            progressBar.className = 'progress-bar error';
+            addLog(new Date().toLocaleTimeString(), `Error: ${err.message}`, 'error');
+        }
+    }
+
+    // Dropzone handlers
+    dropzone.onclick = () => fileInput.click();
+    dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('dragover'); };
+    dropzone.ondragleave = () => dropzone.classList.remove('dragover');
+    dropzone.ondrop = e => { 
+        e.preventDefault(); 
+        dropzone.classList.remove('dragover'); 
+        if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); 
+    };
+    fileInput.onchange = () => { if (fileInput.files.length) handleFile(fileInput.files[0]); };
+
+    function resetJobView() {
+        if (state.eventSource) state.eventSource.close();
+        clearInterval(state.elapsedInterval);
+        state.elapsedBase = null;
+        state.elapsedStartLocal = null;
+        logContainer.innerHTML = '';
+        progressBar.className = 'progress-bar';
+        progressBar.querySelector('.fill').style.width = '0%';
+        downloadBtn.hidden = true;
+        cancelBtn.hidden = true;
+        elapsedTime.textContent = '';
+        bookInfo.hidden = true;
+        bookCover.className = 'book-cover placeholder';
+        bookCover.innerHTML = '📚';
+        bookTitle.textContent = '';
+        bookAuthor.textContent = '';
+        bookDuration.textContent = '';
+        bookChapters.textContent = '';
+        bookSize.textContent = '';
+    }
+
+    function updateElapsed() {
+        if (state.elapsedBase === null) return;
+        const s = state.elapsedBase + Math.floor((Date.now() - state.elapsedStartLocal) / 1000);
+        elapsedTime.textContent = `Elapsed: ${Math.floor(s/60)}m ${s%60}s`;
+    }
+
+    function setElapsedFromServer(elapsedSeconds) {
+        clearInterval(state.elapsedInterval);
+        if (elapsedSeconds !== null && elapsedSeconds !== undefined) {
+            state.elapsedBase = elapsedSeconds;
+            state.elapsedStartLocal = Date.now();
+            updateElapsed();
+            state.elapsedInterval = setInterval(updateElapsed, 1000);
+        } else {
+            state.elapsedBase = null;
+            elapsedTime.textContent = 'Queued...';
+        }
+    }
+
+    function addLog(time, msg, level = 'info') {
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-message ${level}">${msg}</span>`;
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    async function loadJobs() {
+        try {
+            const jobs = await (await fetch('/jobs')).json();
+            if (!jobs.length) { 
+                jobsList.innerHTML = '<p>No recent jobs</p>'; 
+                return; 
+            }
+            jobsList.innerHTML = '<table role="grid"><tbody>' + jobs.map(j => {
+                const title = j.metadata?.title || j.filename;
+                const author = j.metadata?.author || '';
+                const hasCover = j.has_cover;
+                const canRetry = j.abs_item_id && ['cancelled', 'error'].includes(j.status);
+                return `
+                <tr class="${j.id === state.currentJobId ? 'selected' : ''}" data-id="${j.id}">
+                    <td style="display:flex;align-items:center;gap:0.75rem;">
+                        ${hasCover 
+                            ? `<img src="/cover/${j.id}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">` 
+                            : `<div style="width:40px;height:40px;background:#e0e0e0;border-radius:4px;display:flex;align-items:center;justify-content:center;">📚</div>`}
+                        <div>
+                            <strong>${title}</strong>
+                            ${author ? `<br><small style="opacity:0.7">${author}</small>` : ''}
+                        </div>
+                    </td>
+                    <td>
+                        ${j.status === 'queued' ? `Queued (#${j.queue_position})` : j.status.charAt(0).toUpperCase() + j.status.slice(1)}
+                        ${j.total_chapters > 0 ? `<br><small>${j.current_chapter}/${j.total_chapters}</small>` : ''}
+                        ${canRetry ? `<br><button class="retry-btn outline" data-abs-id="${j.abs_item_id}" data-title="${title}" onclick="event.stopPropagation()">Retry</button>` : ''}
+                    </td>
+                </tr>`;
+            }).join('') + '</tbody></table>';
+            
+            jobsList.querySelectorAll('tr[data-id]').forEach(row => {
+                row.onclick = () => viewJob(row.dataset.id);
+            });
+            
+            jobsList.querySelectorAll('.retry-btn').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    convertFromLibrary(btn.dataset.absId, btn.dataset.title);
+                };
+            });
+        } catch { 
+            jobsList.innerHTML = '<p>Failed to load jobs</p>'; 
+        }
+    }
+
+    function viewJob(jobId) {
+        resetJobView();
+        state.currentJobId = jobId;
+        
+        // Switch to jobs tab to show progress
+        switchTab('jobs');
+        progressContainer.hidden = false;
+        
+        jobsList.querySelectorAll('tr[data-id]').forEach(row => {
+            row.classList.toggle('selected', row.dataset.id === jobId);
+        });
+        
+        connectToJob(jobId);
+    }
+
+    async function cancelJob(jobId) {
+        if (!confirm('Cancel this job?')) return;
+        
+        try {
+            const res = await fetch(`/cancel/${jobId}`, { method: 'POST' });
+            if (!res.ok) {
+                const data = await res.json();
+                addLog(new Date().toLocaleTimeString(), `Failed to cancel: ${data.error}`, 'error');
+            }
+        } catch (err) {
+            addLog(new Date().toLocaleTimeString(), `Cancel failed: ${err.message}`, 'error');
+        }
+    }
+    
+    function connectToJob(jobId) {
+        let isFirstMessage = true;
+        
+        state.eventSource = new EventSource(`/status/${jobId}`);
+        
+        state.eventSource.onmessage = e => {
+            const d = JSON.parse(e.data);
+            
+            if (d.status === 'not_found') { 
+                state.eventSource.close(); 
+                addLog(new Date().toLocaleTimeString(), 'Job not found or expired', 'error'); 
+                return; 
+            }
+            
+            progressStatus.textContent = d.status.charAt(0).toUpperCase() + d.status.slice(1);
+            
+            if (isFirstMessage) {
+                setElapsedFromServer(d.elapsed_seconds);
+                logContainer.innerHTML = '';
+                
+                // Update metadata display
+                if (d.metadata && Object.keys(d.metadata).length > 0) {
+                    bookInfo.hidden = false;
+                    bookTitle.textContent = d.metadata.title || d.filename || 'Unknown';
+                    
+                    let authorText = '';
+                    if (d.metadata.author) authorText = `By ${d.metadata.author}`;
+                    if (d.metadata.narrator && d.metadata.narrator !== d.metadata.author) {
+                        authorText += authorText ? ` · Narrated by ${d.metadata.narrator}` : `Narrated by ${d.metadata.narrator}`;
+                    }
+                    bookAuthor.textContent = authorText;
+                    
+                    bookDuration.textContent = d.metadata.duration ? `⏱️ ${d.metadata.duration}` : '';
+                    bookChapters.textContent = d.metadata.chapters_count ? `📖 ${d.metadata.chapters_count} chapters` : '';
+                    bookSize.textContent = d.metadata.file_size_mb ? `💾 ${d.metadata.file_size_mb} MB` : '';
+                    
+                    // Load cover art
+                    if (d.has_cover) {
+                        const img = document.createElement('img');
+                        img.src = `/cover/${jobId}`;
+                        img.className = 'book-cover';
+                        img.onerror = () => {
+                            bookCover.className = 'book-cover placeholder';
+                            bookCover.innerHTML = '📚';
+                        };
+                        img.onload = () => {
+                            bookCover.className = 'book-cover';
+                            bookCover.innerHTML = '';
+                            bookCover.appendChild(img);
+                        };
+                    }
+                }
+            }
+            
+            if (d.messages && d.messages.length > 0) {
+                d.messages.forEach(m => addLog(m.time, m.message, m.level));
+            }
+            
+            isFirstMessage = false;
+            
+            const fill = progressBar.querySelector('.fill');
+            if (d.status === 'downloading') {
+                progressBar.className = 'progress-bar uploading';
+            } else if (d.status === 'queued') {
+                progressBar.className = 'progress-bar queued';
+            } else if (d.status === 'processing') {
+                progressBar.className = 'progress-bar processing';
+                if (d.total_chapters > 0) {
+                    fill.style.width = `${(d.current_chapter / d.total_chapters) * 100}%`;
+                }
+            } else if (d.status === 'complete') {
+                progressBar.className = 'progress-bar complete';
+            } else if (d.status === 'cancelled') {
+                progressBar.className = 'progress-bar error';
+            }
+            
+            // Show cancel button for active jobs
+            cancelBtn.hidden = !['downloading', 'queued', 'processing'].includes(d.status);
+            cancelBtn.onclick = () => cancelJob(jobId);
+            
+            loadJobs();
+            
+            if (d.status === 'complete') {
+                state.eventSource.close();
+                downloadBtn.hidden = false;
+                cancelBtn.hidden = true;
+                downloadBtn.onclick = () => location.href = `/download/${jobId}`;
+                clearInterval(state.elapsedInterval);
+                state.elapsedInterval = null;
+            }
+            
+            if (d.status === 'error' || d.status === 'cancelled') { 
+                state.eventSource.close();
+                cancelBtn.hidden = true;
+                clearInterval(state.elapsedInterval);
+                state.elapsedInterval = null;
+            }
+        };
+        
+        state.eventSource.onerror = () => { 
+            state.eventSource.close(); 
+            addLog(new Date().toLocaleTimeString(), 'Connection lost. Click job to reconnect.', 'warning'); 
+            clearInterval(state.elapsedInterval); 
+        };
+    }
+
+    async function handleFile(file) {
+        if (!file.name.match(/\.(m4b|m4a)$/i)) { 
+            alert('Please select a .m4b or .m4a file'); 
+            return; 
+        }
+        
+        resetJobView();
+        switchTab('jobs');
+        progressContainer.hidden = false;
+        progressStatus.textContent = 'Uploading';
+        progressBar.className = 'progress-bar uploading';
+        addLog(new Date().toLocaleTimeString(), `Uploading: ${file.name}`);
+        
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            if (!res.ok) throw new Error((await res.json()).error || 'Upload failed');
+            
+            const { job_id } = await res.json();
+            state.currentJobId = job_id;
+            
+            addLog(new Date().toLocaleTimeString(), 'Upload complete, processing...', 'success');
+            loadJobs();
+            connectToJob(job_id);
+            
+        } catch (err) { 
+            progressStatus.textContent = 'Error'; 
+            addLog(new Date().toLocaleTimeString(), err.message, 'error'); 
+        }
+    }
+</script>
+{% endblock %}

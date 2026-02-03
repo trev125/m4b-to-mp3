@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}M4B to MP3{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        :root { font-size: 14px; }
+        .dropzone {
+            border: 2px dashed var(--pico-muted-border-color);
+            border-radius: var(--pico-border-radius);
+            padding: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .dropzone:hover, .dropzone.dragover { border-color: var(--pico-primary); }
+        .log-container {
+            background: #1e1e1e;
+            border-radius: var(--pico-border-radius);
+            padding: 1rem;
+            max-height: 250px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+        .log-entry { margin: 0.25rem 0; }
+        .log-time { color: #6a9955; margin-right: 0.5rem; }
+        .log-message { color: #d4d4d4; }
+        .log-message.success { color: #4ec9b0; }
+        .log-message.warning { color: #dcdcaa; }
+        .log-message.error { color: #f14c4c; }
+        table tbody tr { cursor: pointer; transition: all 0.1s; }
+        table tbody tr:hover td { background-color: #e3f2fd; }
+        table tbody tr.selected td { background-color: #bbdefb; border-left: 4px solid #1976d2; }
+        table tbody tr.selected:hover td { background-color: #90caf9; }
+        [data-theme="dark"] table tbody tr:hover td { background-color: #1e3a5f; }
+        [data-theme="dark"] table tbody tr.selected td { background-color: #0d47a1; }
+        [data-theme="dark"] table tbody tr.selected:hover td { background-color: #1565c0; }
+        [data-theme="dark"] .progress-bar { background: #424242; }
+        .theme-toggle { cursor: pointer; font-size: 1.2rem; background: none; border: none; padding: 0.5rem; }
+        .progress-bar {
+            height: 0.5rem;
+            margin-bottom: 1rem;
+            border-radius: var(--pico-border-radius);
+            background: #e0e0e0;
+            position: relative;
+            overflow: hidden;
+        }
+        .progress-bar .fill {
+            height: 100%;
+            width: 0%;
+            border-radius: var(--pico-border-radius);
+            position: relative;
+            overflow: hidden;
+            transition: width 0.3s ease;
+        }
+        .progress-bar .fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 30%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+        .progress-bar.queued .fill { width: 100% !important; background: #90caf9; }
+        .progress-bar.uploading .fill { width: 100% !important; background: #ff9800; }
+        .progress-bar.processing .fill { background: #1976d2; }
+        .progress-bar.complete .fill { width: 100% !important; background: #2e7d32; }
+        .progress-bar.complete .fill::after { display: none; }
+        @keyframes shimmer {
+            0% { left: -30%; }
+            100% { left: 100%; }
+        }
+        .btn-success { background: #2e7d32; border-color: #2e7d32; }
+        .btn-success:hover { background: #1b5e20; border-color: #1b5e20; }
+        .btn-danger { background: #c62828; border-color: #c62828; }
+        .btn-danger:hover { background: #b71c1c; border-color: #b71c1c; }
+        .retry-btn { padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-top: 0.25rem; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .tabs button { flex: 1; }
+        .tabs button.active { background: var(--pico-primary); color: white; }
+        .tab-content { display: block; }
+        .tab-content[hidden] { display: none; }
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+        .library-item {
+            cursor: pointer;
+            text-align: center;
+            padding: 0.5rem;
+            border-radius: var(--pico-border-radius);
+            transition: background 0.2s;
+        }
+        .library-item:hover { background: var(--pico-card-background-color); }
+        .library-item-cover {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: var(--pico-border-radius);
+            overflow: hidden;
+            background: #e0e0e0;
+            margin-bottom: 0.5rem;
+        }
+        .library-item-cover img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .library-item-cover .badge {
+            position: absolute;
+            top: 0.25rem;
+            right: 0.25rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .badge-m4b { background: #4caf50; color: white; }
+        .badge-m4a { background: #2196f3; color: white; }
+        .badge-mp3 { background: #9e9e9e; color: white; }
+        .badge-other { background: #ff9800; color: white; }
+        .library-item-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .library-item-author {
+            font-size: 0.75rem;
+            color: var(--pico-muted-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        [data-theme="dark"] .library-item-cover { background: #424242; }
+        .book-info {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .book-cover {
+            width: 120px;
+            height: 120px;
+            object-fit: cover;
+            border-radius: var(--pico-border-radius);
+            background: #e0e0e0;
+            flex-shrink: 0;
+        }
+        .book-cover.placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            color: #9e9e9e;
+        }
+        [data-theme="dark"] .book-cover.placeholder { background: #424242; }
+        .book-meta { flex: 1; min-width: 0; }
+        .book-title { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.25rem 0; }
+        .book-author { color: var(--pico-muted-color); margin: 0 0 0.5rem 0; }
+        .book-details { font-size: 0.85rem; color: var(--pico-muted-color); }
+        .book-details span { margin-right: 1rem; }
+        {% block extra_css %}{% endblock %}
+    </style>
+    <script>
+        const getPreferredTheme = () => {
+            const stored = localStorage.getItem('theme');
+            if (stored) return stored;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        };
+        const setTheme = (theme) => {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+            const toggle = document.getElementById('themeToggle');
+            if (toggle) toggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+        };
+        setTheme(getPreferredTheme());
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+            if (!localStorage.getItem('theme')) setTheme(e.matches ? 'dark' : 'light');
+        });
+    </script>
+</head>
+<body>
+    {% block body %}{% endblock %}
+    {% block scripts %}{% endblock %}
+</body>
+</html>
