@@ -663,7 +663,7 @@ def job_status(job_id):
                     'current_chapter': job.current_chapter,
                     'queue_position': job.queue_position,
                     'started_at': job.started_at.isoformat() if job.started_at else None,
-                    'elapsed_seconds': int((datetime.now() - job.started_at).total_seconds()) if job.started_at else None,
+                    'elapsed_seconds': int(((job.completed_at or datetime.now()) - job.started_at).total_seconds()) if job.started_at else None,
                     'metadata': job.metadata,
                     'has_cover': job.cover_path is not None and os.path.exists(job.cover_path) if job.cover_path else False
                 }

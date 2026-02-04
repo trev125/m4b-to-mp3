@@ -96,6 +96,10 @@
         </article>
     </div>
 </main>
+
+<footer class="container" style="text-align: center; padding: 2rem 0; opacity: 0.7;">
+    <small><a href="https://github.com/trev125/m4b-to-mp3" target="_blank">View on GitHub</a></small>
+</footer>
 {% endblock %}
 
 {% block scripts %}
@@ -494,8 +498,18 @@
             progressStatus.textContent = d.status.charAt(0).toUpperCase() + d.status.slice(1);
             
             if (isFirstMessage) {
-                setElapsedFromServer(d.elapsed_seconds);
                 logContainer.innerHTML = '';
+                
+                // Only start elapsed timer for active jobs
+                if (!['complete', 'error', 'cancelled'].includes(d.status)) {
+                    setElapsedFromServer(d.elapsed_seconds);
+                } else {
+                    // Show final elapsed time for finished jobs
+                    if (d.elapsed_seconds) {
+                        const s = d.elapsed_seconds;
+                        elapsedTime.textContent = `Completed in ${Math.floor(s/60)}m ${s%60}s`;
+                    }
+                }
                 
                 // Update metadata display
                 if (d.metadata && Object.keys(d.metadata).length > 0) {
